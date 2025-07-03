@@ -2,175 +2,173 @@ package websocket
 
 import (
 	"context"
+	"encoding/base64" // Keep import, as cmdrunner still uses it for decoding
+	"fmt"
+	"sync"
 	"time"
+	"websocket-backend/internal/cmdrunner"
+	"websocket-backend/pkg/utils"
 
 	"github.com/gorilla/websocket"
 )
 
-const (
-	// Time allowed to write a message to the peer
-	writeWait = 10 * time.Second
-
-	// Time allowed to read the next pong message from the peer
-	pongWait = 60 * time.Second
-
-	// Send pings to peer with this period. Must be less than pongWait
-	pingPeriod = (pongWait * 9) / 10
-
-	// Maximum message size allowed from peer
-	maxMessageSize = 512
-)
-
-// Client is a middleman between the websocket connection and the cmdrunner
+// Client represents a single WebSocket client connection.
 type Client struct {
-	conn *websocket.Conn
-
-	// Buffered channel of outbound messages
-	send chan []byte
-
-	// Context for managing the lifecycle of the client and its associated command
-	ctx    context.Context
-	cancel context.CancelFunc
+	conn     *websocket.Conn
+	send     chan []byte
+	ctx      context.Context
+	cancel   context.CancelFunc
+	once     sync.Once
+	mu       sync.Mutex // For protecting access to conn (e.g., Close)
+	isClosed bool
 }
 
-// Creates a new WebSocket client
+// NewClient creates a new WebSocket client instance.
 func NewClient(conn *websocket.Conn) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		conn:   conn,
-		send:   make(chan []byte, 256), // Buffer for outgoing messages
+		send:   make(chan []byte, 256), // Buffered channel for outgoing messages
 		ctx:    ctx,
 		cancel: cancel,
 	}
 }
 
-// ReadLoop reads messages from the WebSocket connection.
-// It typically receives client commands (like the Base64 encoded cmd, or a "stop" signal).
-func (c *Client) ReadLoop(onCommand func(encodedCmd, targetHost string), onError func(error)) {
-	defer func() {
-		c.Close()
-	}()
+// Send queues a message to be sent to the WebSocket client.
+// This is used to send command output and status messages back to the client.
+func (c *Client) Send(message []byte) {
+	c.mu.Lock()
+	closed := c.isClosed
+	c.mu.Unlock()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	if closed {
+		utils.Debug("Attempted to send message to a closed WebSocket client.")
+		return
+	}
 
-	for {
-		select {
-		case <-c.ctx.Done(): // Context cancelled, stop reading
-			return
-		default:
-			messageType, message, err := c.conn.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-					onError(err)
-				}
-				return
-			}
-
-			if messageType == websocket.TextMessage {
-				// The client is expected to send a Base64 encoded command string.
-				// You'll need to parse this message to extract the command and target.
-				// For example, if the client sends {"cmd": "b64encodedcmd", "target": "host"},
-				// you'd decode the JSON here.
-				//
-				// For simplicity in this outline, let's assume the first message *is* the b64 command
-				// and the target host might come from the initial WebSocket URL query params.
-
-				// Example: Assuming message is just the base64 encoded command string directly.
-				// In a real app, you'd likely parse a JSON message like:
-				/*
-					var req struct {
-						EncodedCmd string `json:"cmd"`
-						Target     string `json:"target"`
-					}
-					if err := json.Unmarshal(message, &req); err != nil {
-						onError(fmt.Errorf("failed to parse client message: %w", err))
-						continue
-					}
-					onCommand(req.EncodedCmd, req.Target)
-				*/
-
-				// For now, let's assume the command and target are passed via the initial URL query.
-				// The `onCommand` callback will be triggered from the `handler.go` after extracting this.
-				// So, ReadLoop here is more for future client-sent controls (like "stop streaming").
-				// If you want the command from the message, you'd process `message` here.
-				// For this outline, let's assume `onCommand` is called just once from handler.
-			}
-		}
+	select {
+	case c.send <- message:
+		// Message sent to channel
+	case <-c.ctx.Done():
+		utils.Debug("Context done, not sending message to WebSocket client.")
+	default:
+		// If channel is full and context not done, log a warning
+		utils.Error("WebSocket send channel is full, dropping message.")
 	}
 }
 
-// WriteLoop writes messages from the send channel to the WebSocket connection.
-// This is where you send the streamed output from the remote command.
+// GetContext returns the client's context, useful for external goroutines
+// to listen for client disconnection.
+func (c *Client) GetContext() context.Context {
+	return c.ctx
+}
+
+// Close gracefully closes the client connection.
+func (c *Client) Close() {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.isClosed = true
+		c.mu.Unlock()
+
+		c.cancel()     // Signal context cancellation
+		close(c.send)  // Close the send channel
+		c.conn.Close() // Close the underlying WebSocket connection
+		utils.Info("WebSocket client connection closed.")
+	})
+}
+
+// WriteLoop continuously reads messages from the send channel and writes them to the WebSocket.
 func (c *Client) WriteLoop() {
-	ticker := time.NewTicker(pingPeriod)
+	ticker := time.NewTicker(time.Second * 9) // Ping interval for WebSocket keep-alive
 	defer func() {
 		ticker.Stop()
-		c.Close()
+		utils.Info("WebSocket WriteLoop finished.")
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				// The send channel has been closed.
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			if !ok { // Channel closed, indicating client.Close() was called
 				return
 			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				// Handle write error (e.g., connection closed unexpectedly)
-				return
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				utils.Error("Error writing message to WebSocket:", err)
+				return // Exit loop on write error
 			}
-			w.Write(message)
-
-			// Add queued chat messages to the current websocket message.
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write(<-c.send)
-			}
-
-			if err := w.Close(); err != nil {
-				return
-			}
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+		case <-ticker.C: // Send ping message to keep connection alive
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
+				utils.Error("Error sending ping message to WebSocket:", err)
+				return // Exit loop on ping error
 			}
-		case <-c.ctx.Done(): // Context cancelled, stop writing
+		case <-c.ctx.Done(): // Context cancelled, signaling client disconnection
+			utils.Info("WebSocket WriteLoop context cancelled.")
 			return
 		}
 	}
 }
 
-// Send sends a message to the client's outbound buffer.
-func (c *Client) Send(message []byte) {
-	select {
-	case c.send <- message:
-	case <-c.ctx.Done(): // Context cancelled, don't send
-		// Log that message couldn't be sent because context is done
-	default:
-		// Drop message if send buffer is full, or implement backpressure/logging
-	}
-}
+// ReadLoop continuously reads messages from the WebSocket.
+// It expects the first message to be the Base64-encoded command to execute.
+func (c *Client) ReadLoop(
+	cmdRunner *cmdrunner.CommandRunner, // Dependency: CommandRunner to execute commands
+	targetHost string, // Dependency: Target host for SSH
+	onError func(err error), // Callback for handling read errors
+) {
+	defer func() {
+		c.Close() // Ensure client connection is closed when ReadLoop exits
+		utils.Info("WebSocket ReadLoop finished for target:", targetHost)
+	}()
 
-// Close gracefully closes the client connection and cancels its context.
-func (c *Client) Close() {
-	select {
-	case <-c.ctx.Done():
-		// Already closed
-		return
-	default:
-		c.cancel() // Signal all goroutines associated with this client to stop
-		c.conn.Close()
-	}
-}
+	c.conn.SetReadLimit(512)                                 // Max message size
+	c.conn.SetReadDeadline(time.Now().Add(time.Second * 60)) // Set initial read deadline
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(time.Second * 60))
+		return nil
+	})
 
-// GetContext returns the client's context for external cancellation signals.
-func (c *Client) GetContext() context.Context {
-	return c.ctx
+	// Ensure that one command is processed at a time
+	var commandReceived bool
+
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				utils.Error("Unexpected WebSocket close error for client connected to", targetHost, ":", err)
+			}
+			onError(err)
+			return
+		}
+
+		if commandReceived {
+			utils.Info("Ignoring subsequent message from client as command already provided/executing.")
+			c.Send([]byte("Server: Only one command can be executed per WebSocket connection. Ignoring subsequent messages.\r\n"))
+			continue
+		}
+
+		cmdEncodedString := string(message)
+		utils.Info("Received Base64-encoded command from WebSocket client for target", targetHost, ":", cmdEncodedString)
+
+		commandReceived = true
+
+		go func() {
+			cmdExecCtx, cmdExecCancel := context.WithCancel(c.ctx)
+			defer cmdExecCancel()
+
+			// Pass the Base64-encoded string directly to RunAndStream
+			execErr := cmdRunner.RunAndStream(cmdExecCtx, cmdEncodedString, targetHost, c)
+
+			if execErr != nil {
+				decodedCmd, decodeErr := base64.StdEncoding.DecodeString(cmdEncodedString)
+				cmdForErrorMsg := cmdEncodedString
+				if decodeErr == nil {
+					cmdForErrorMsg = string(decodedCmd)
+				}
+				errMsg := fmt.Sprintf("Error executing command '%s' on %s: %v\r\n", cmdForErrorMsg, targetHost, execErr)
+				utils.Error(errMsg)
+				c.Send([]byte(fmt.Sprintf("ERROR: %s", errMsg)))
+			} else {
+				c.Send([]byte(fmt.Sprintf("\r\nBase64-encoded command received on %s finished successfully.\r\n", targetHost)))
+			}
+		}()
+	}
 }

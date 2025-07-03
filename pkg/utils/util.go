@@ -1,72 +1,33 @@
 package utils
 
 import (
-	"bufio"
-	"fmt"
+	"log"
 	"os"
-	"strings"
-	"websocket-backend/models"
-
-	log "github.com/sirupsen/logrus"
+	"sync"
 )
 
-// Set up logger
+var appLogger *log.Logger
+var once sync.Once
+
 func SetupLogger() {
-	log.SetOutput(os.Stdout)
-	log.SetLevel(log.DebugLevel)
+	once.Do(func() {
+		appLogger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
+		appLogger.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+		log.Println("Logger setup completed.")
+	})
 }
 
-// Parse the file that contain info about targets/hosts
-func ParseInventoryFile(path string) ([]models.SSHConfig, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open inventory file: %w", err)
-	}
-	defer file.Close()
+func Info(message string, args ...interface{}) {
+	SetupLogger()
+	appLogger.Printf("[INFO] "+message+"\n", args...)
+}
 
-	var hosts []models.SSHConfig
-	scanner := bufio.NewScanner(file)
+func Error(message string, args ...interface{}) {
+	SetupLogger()
+	appLogger.Printf("[ERROR] "+message+"\n", args...)
+}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		entry := models.SSHConfig{}
-
-		for _, field := range fields {
-			kv := strings.SplitN(field, "=", 2)
-			if len(kv) != 2 {
-				continue
-			}
-			key := strings.ToLower(kv[0])
-			value := kv[1]
-
-			switch key {
-			case "target":
-				entry.Target = value
-			case "user":
-				entry.Username = value
-			case "password":
-				entry.Password = value
-			case "key":
-				entry.KeyPath = value
-			}
-		}
-
-		if entry.Target != "" && entry.Username != "" && (entry.Password != "" || entry.KeyPath != "") {
-			hosts = append(hosts, entry)
-		} else {
-			log.Printf("Skipping incomplete line: %s", line)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading inventory file: %w", err)
-	}
-
-	return hosts, nil
+func Debug(message string, args ...interface{}) {
+	SetupLogger()
+	appLogger.Printf("[DEBUG] "+message+"\n", args...)
 }

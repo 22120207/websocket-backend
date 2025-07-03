@@ -7,13 +7,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Return list of available commands
+// GetAllowedCommandsHandler all allowed commands
 func GetAllowedCommandsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		allowedCmds := allowedcmds.GetAllowedCommands()
+		commands := allowedcmds.GetAllAllowedCommands()
 
 		c.JSON(http.StatusOK, gin.H{
-			"allowedCommands": allowedCmds,
+			"status":   "success",
+			"commands": commands,
 		})
 	}
 }

@@ -1,0 +1,1 @@
+1. User nhập host muốn chạy lệnh --> frontend query prefix /ws/stream?target=,
