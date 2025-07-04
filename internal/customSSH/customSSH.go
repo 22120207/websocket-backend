@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 	"websocket-backend/pkg/utils"
 
@@ -24,8 +25,8 @@ func (s *SSHConfig) UsePrivateKey() bool {
 }
 
 const (
-	SIGTERM = ssh.SIGTERM
-	SIGKILL = ssh.SIGKILL
+	SIGTERM = ssh.Signal("TERM")
+	SIGKILL = ssh.Signal("KILL")
 )
 
 // GetSSHClientConfig creates an *ssh.ClientConfig from the provided custom SSHConfig.
@@ -89,6 +90,18 @@ func ExecuteStream(conn *ssh.Client, command string) (stdout io.Reader, stderr i
 		return nil, nil, nil, fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
+	// Request a pseudo-terminal (PTY)
+	// This makes the remote command behave like it's running in a real terminal,
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          0, // disable echoing
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if err := session.RequestPty("xterm", 40, 80, modes); err != nil {
+		session.Close()
+		return nil, nil, nil, fmt.Errorf("failed to request pty: %w", err)
+	}
+
 	stdoutPipe, err := session.StdoutPipe()
 	if err != nil {
 		session.Close()
@@ -106,6 +119,6 @@ func ExecuteStream(conn *ssh.Client, command string) (stdout io.Reader, stderr i
 		return nil, nil, nil, fmt.Errorf("failed to start remote command '%s': %w", command, err)
 	}
 
-	utils.Debug("Remote command '" + command + "' started.")
+	utils.Debug("Remote command '" + strings.ReplaceAll(command, "\n", " ") + "' started.")
 	return stdoutPipe, stderrPipe, session, nil
 }

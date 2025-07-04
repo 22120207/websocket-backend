@@ -4,11 +4,12 @@ import "sync"
 
 var (
 	allowedCommands = map[string]bool{
-		"tail":    true,
-		"top":     true,
-		"tcpdump": true,
+		"tail":       true,
+		"ls":         true,
+		"journalctl": true,
+		"tcpdump":    true,
 	}
-	mu sync.RWMutex // Mutex to protect access to allowedCommands
+	mu sync.RWMutex
 )
 
 // IsValidCommand checks if a given command is in the list of allowed commands.
@@ -27,18 +28,4 @@ func GetAllAllowedCommands() []string {
 		commands = append(commands, cmd)
 	}
 	return commands
-}
-
-// AddAllowedCommand adds a new command to the allowed list.
-func AddAllowedCommand(cmd string) {
-	mu.Lock()
-	defer mu.Unlock()
-	allowedCommands[cmd] = true
-}
-
-// RemoveAllowedCommand removes a command from the allowed list.
-func RemoveAllowedCommand(cmd string) {
-	mu.Lock()
-	defer mu.Unlock()
-	delete(allowedCommands, cmd)
 }

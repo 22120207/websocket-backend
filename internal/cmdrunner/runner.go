@@ -1,13 +1,13 @@
 package cmdrunner
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
-	"time"
 
 	"websocket-backend/internal/allowedcmds"
 	"websocket-backend/internal/config"
@@ -41,7 +41,7 @@ func (cr *CommandRunner) RunAndStream(
 		return fmt.Errorf("failed to decode command: %w", err)
 	}
 	fullCmd := string(decodedCmdBytes)
-	utils.Info("Attempting to run command:", fullCmd, "on target:", targetHost)
+	utils.Info("Attempting to run command:", strings.ReplaceAll(fullCmd, "\n", " "), "on target:", targetHost)
 
 	parts := strings.Fields(fullCmd)
 	if len(parts) == 0 {
@@ -55,7 +55,7 @@ func (cr *CommandRunner) RunAndStream(
 	}
 	utils.Info("Command '" + baseCmd + "' is allowed. Proceeding with SSH execution.")
 
-	// Get the SSHConfig for the target host from the main config
+	// Get the SSHConfig for the target (username, passwd and key)
 	sshConnConfig := cr.Config.GetSSHClientConfig(targetHost)
 	if sshConnConfig == nil || sshConnConfig.Username == "" {
 		return fmt.Errorf("SSH configuration for target '%s' not found or incomplete", targetHost)
@@ -79,11 +79,11 @@ func (cr *CommandRunner) RunAndStream(
 
 	stdoutPipe, stderrPipe, session, err := customSSH.ExecuteStream(sshConn, fullCmd)
 	if err != nil {
-		utils.Error("Failed to execute command '"+fullCmd+"' on", sshConnConfig.Target, ":", err)
-		return fmt.Errorf("failed to execute command '%s' on %s: %w", fullCmd, sshConnConfig.Target, err)
+		utils.Error("Failed to execute command '"+strings.ReplaceAll(fullCmd, "\n", " ")+"' on", sshConnConfig.Target, ":", err)
+		return fmt.Errorf("failed to execute command '%s' on %s: %w", strings.ReplaceAll(fullCmd, "\n", " "), sshConnConfig.Target, err)
 	}
 	defer func() {
-		utils.Info("Closing SSH session for command:", fullCmd)
+		utils.Info("Closing SSH session for command:", strings.ReplaceAll(fullCmd, "\n", " "))
 		session.Close()
 	}()
 
@@ -93,11 +93,37 @@ func (cr *CommandRunner) RunAndStream(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, err := io.CopyBuffer(&websocketStreamWriter{wsClient: wsClient, streamType: "stdout"}, stdoutPipe, buffer)
+
+		pr, pw := io.Pipe()
+
+		var scanWg sync.WaitGroup
+		scanWg.Add(1)
+		go func() {
+			defer scanWg.Done()
+			scanner := bufio.NewScanner(pr)
+			for scanner.Scan() {
+				line := scanner.Bytes()
+
+				lineCopy := make([]byte, len(line))
+				copy(lineCopy, line)
+
+				wsClient.Send(lineCopy)
+			}
+			if err := scanner.Err(); err != nil {
+				utils.Error(fmt.Sprintf("Scanner error streaming stdout for command '%s': %v", strings.ReplaceAll(fullCmd, "\n", " "), err))
+			}
+		}()
+
+		_, err := io.CopyBuffer(pw, stdoutPipe, buffer)
+		pw.Close() // This signals scanner to end
 		if err != nil && err != io.EOF {
-			utils.Error(fmt.Sprintf("Error streaming stdout for command '%s' on %s: %v", fullCmd, sshConnConfig.Target, err))
+			utils.Error(fmt.Sprintf("Error copying stdout for command '%s' on %s: %v", strings.ReplaceAll(fullCmd, "\n", " "), sshConnConfig.Target, err))
 		}
-		utils.Info("Stdout streaming finished for command:", fullCmd)
+
+		// Wait for scanner goroutine to fully drain the pipe
+		scanWg.Wait()
+
+		utils.Info("Stdout streaming finished for command:", strings.ReplaceAll(fullCmd, "\n", ""))
 	}()
 
 	wg.Add(1)
@@ -107,7 +133,7 @@ func (cr *CommandRunner) RunAndStream(
 		if err != nil && err != io.EOF {
 			utils.Error(fmt.Sprintf("Error streaming stderr for command '%s' on %s: %v", fullCmd, sshConnConfig.Target, err))
 		}
-		utils.Info("Stderr streaming finished for command:", fullCmd)
+		utils.Info("Stdout streaming finished for command:", strings.ReplaceAll(fullCmd, "\n", ""))
 	}()
 
 	wg.Add(1)
@@ -121,31 +147,12 @@ func (cr *CommandRunner) RunAndStream(
 
 		select {
 		case <-ctx.Done():
-			utils.Info("Client context cancelled for command:", fullCmd, ". Attempting to terminate remote command.")
-			if err := session.Signal(customSSH.SIGTERM); err != nil {
-				utils.Error("Failed to send SIGTERM to remote process for command '"+fullCmd+"':", err)
-			}
-			select {
-			case <-time.After(5 * time.Second):
-				utils.Info("Remote command did not terminate gracefully after SIGTERM. Sending SIGKILL.")
-				if err := session.Signal(customSSH.SIGKILL); err != nil {
-					utils.Error("Failed to send SIGKILL to remote process for command '"+fullCmd+"':", err)
-				}
-			case <-sessionDone:
-				utils.Info("Remote command terminated gracefully after SIGTERM.")
-			}
-			return
-		case <-time.After(10 * time.Minute):
-			utils.Info("Command '" + fullCmd + "' timed out after 10 minutes. Terminating remote command.")
-			if err := session.Signal(customSSH.SIGTERM); err != nil {
-				utils.Error("Failed to send SIGTERM to remote process on timeout for command '"+fullCmd+"':", err)
-			}
-			return
+			sshConn.Close()
 		case err := <-sessionDone:
 			if err != nil {
-				utils.Error("Remote command '"+fullCmd+"' exited with error:", err)
+				utils.Error("Remote command '"+strings.ReplaceAll(fullCmd, "\n", " ")+"' exited with error:", err)
 			} else {
-				utils.Info("Remote command '" + fullCmd + "' finished gracefully.")
+				utils.Info("Remote command '" + strings.ReplaceAll(fullCmd, "\n", " ") + "' finished gracefully.")
 			}
 			return
 		}
@@ -153,7 +160,7 @@ func (cr *CommandRunner) RunAndStream(
 
 	wg.Wait()
 
-	utils.Info("All streaming and command management goroutines for", fullCmd, "have completed.")
+	utils.Info("All streaming and command management goroutines for", strings.ReplaceAll(fullCmd, "\n", " "), "have completed.")
 	return nil
 }
 

@@ -22,8 +22,6 @@ func NewWebSocketHandler(deps *HandlerDependencies) gin.HandlerFunc {
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		CheckOrigin: func(r *http.Request) bool {
-			// For development, allow all origins.
-			// In production, restrict this to your actual frontend domain(s).
 			return true
 		},
 	}
@@ -46,18 +44,14 @@ func NewWebSocketHandler(deps *HandlerDependencies) gin.HandlerFunc {
 		utils.Info("Target host for WebSocket connection:", targetHost)
 
 		client := NewClient(conn)
-		// No need for a global pool unless you explicitly manage connections elsewhere
-		// wsPool.Register(client) // if you have a pool, uncomment this
 
-		// Start goroutines for reading from and writing to the WebSocket
 		go client.WriteLoop()
-		// Pass dependencies needed for command execution to the ReadLoop
+
 		go client.ReadLoop(
-			deps.CmdRunner, // Pass the CommandRunner
-			targetHost,     // Pass the target host
-			func(readErr error) { // Error callback for ReadLoop
+			deps.CmdRunner,
+			targetHost,
+			func(readErr error) {
 				utils.Error("WebSocket ReadLoop error for client connected to", targetHost, ":", readErr)
-				// wsPool.Unregister(client) // if you have a pool, uncomment this
 			},
 		)
 	}

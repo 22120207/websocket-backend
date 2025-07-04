@@ -19,15 +19,15 @@ func SetupLogger() {
 
 func Info(message string, args ...interface{}) {
 	SetupLogger()
-	appLogger.Printf("[INFO] "+message+"\n", args...)
+	appLogger.Printf("[INFO] "+message+" ", args...)
 }
 
 func Error(message string, args ...interface{}) {
 	SetupLogger()
-	appLogger.Printf("[ERROR] "+message+"\n", args...)
+	appLogger.Printf("[ERROR] "+message+" ", args...)
 }
 
 func Debug(message string, args ...interface{}) {
 	SetupLogger()
-	appLogger.Printf("[DEBUG] "+message+"\n", args...)
+	appLogger.Printf("[DEBUG] "+message+" ", args...)
 }

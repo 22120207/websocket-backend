@@ -120,8 +120,7 @@ func (c *Config) GetSSHClientConfig(target string) *customSSH.SSHConfig {
 	for _, found := range c.Target {
 		fmt.Println(found.Target)
 		if found.Target == target {
-			copy := found
-			return &copy
+			return &found
 		}
 	}
 	return nil
