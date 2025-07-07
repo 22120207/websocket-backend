@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -88,10 +89,33 @@ func (c *Client) WriteLoop() {
 			if !ok {
 				return
 			}
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+
+			// Send data in json format
+			type Message struct {
+				Type string `json:"type"`
+				Data string `json:"data"`
+			}
+
+			msg := Message{
+				Type: "output",
+				Data: string(message),
+			}
+
+			jsonData, err := json.Marshal(msg)
+			if err != nil {
+				utils.Error(err.Error())
+				return
+			}
+
+			if err := c.conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
 				utils.Error("Error writing message to WebSocket:", err)
 				return
 			}
+
+			// if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			// 	utils.Error("Error writing message to WebSocket:", err)
+			// 	return
+			// }
 		case <-ticker.C: // Send ping message to keep connection alive
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				utils.Error("Error sending ping message to WebSocket:", err)
@@ -99,13 +123,13 @@ func (c *Client) WriteLoop() {
 			}
 		case <-c.ctx.Done(): // Context cancelled, signaling client disconnection
 			utils.Info("WebSocket WriteLoop context cancelled.")
+			c.Close()
 			return
 		}
 	}
 }
 
 // ReadLoop continuously reads messages from the WebSocket in base64 format
-
 func (c *Client) ReadLoop(
 	cmdRunner *cmdrunner.CommandRunner,
 	targetHost string,
@@ -139,15 +163,35 @@ func (c *Client) ReadLoop(
 			continue
 		}
 
-		cmdEncodedString := string(message)
+		// Unmarshal the json data receive from client
+		type ReceiveMsg struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		}
+
+		var msg ReceiveMsg
+		err = json.Unmarshal(message, &msg)
+		if err != nil {
+			utils.Error(err.Error())
+		}
+
+		// If the type is not "command" --> exit
+		if msg.Type != "command" {
+			return
+		}
+
+		// Decoded the base64 command
+		cmdEncodedString := string(msg.Command)
 		utils.Info("Received Base64-encoded command from WebSocket client for target", targetHost, ":", cmdEncodedString)
 
 		c.isRunCmd = true
 
 		go func() {
 			cmdExecCtx, cmdExecCancel := context.WithCancel(c.ctx)
-			defer cmdExecCancel()
-			defer c.UpdateState(false)
+			defer func() {
+				cmdExecCancel()
+				c.UpdateState(false)
+			}()
 
 			// Pass the Base64-encoded string directly to RunAndStream
 			execErr := cmdRunner.RunAndStream(cmdExecCtx, cmdEncodedString, targetHost, c)
