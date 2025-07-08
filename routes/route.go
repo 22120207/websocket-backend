@@ -2,7 +2,6 @@ package routes
 
 import (
 	"websocket-backend/controllers"
-	"websocket-backend/internal/cmdrunner"
 	"websocket-backend/internal/config"
 	"websocket-backend/internal/websocket"
 	"websocket-backend/pkg/utils"
@@ -40,8 +39,6 @@ func NewRoutes(cfg *config.Config) *Routes {
 }
 
 func (r *Routes) Setup() *gin.Engine {
-	cmdRunner := cmdrunner.NewCommandRunner(r.appConfig)
-
 	// API route group for HTTP endpoints
 	httpGroup := r.router.Group("/http")
 	{
@@ -54,11 +51,7 @@ func (r *Routes) Setup() *gin.Engine {
 	// API route group for WebSocket endpoints
 	wsGroup := r.router.Group("/ws")
 	{
-		wsDeps := &websocket.HandlerDependencies{
-			Config:    r.appConfig,
-			CmdRunner: cmdRunner,
-		}
-		wsGroup.GET("", websocket.NewWebSocketHandler(wsDeps))
+		wsGroup.GET("", websocket.NewWebSocketHandler())
 	}
 
 	utils.Info("Router setup complete. HTTP endpoints under /http, WebSocket endpoint /ws")

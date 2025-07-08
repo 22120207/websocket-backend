@@ -27,13 +27,11 @@ type Client struct {
 
 // NewClient creates a new WebSocket client instance.
 func NewClient(conn *websocket.Conn) *Client {
-	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		conn:     conn,
 		send:     make(chan []byte, 4096), // Buffered channel for outgoing messages
-		ctx:      ctx,
+		ctx:      context.Background(),
 		isClosed: false,
-		cancel:   cancel,
 		isRunCmd: false,
 	}
 }
@@ -71,6 +69,7 @@ func (c *Client) Close() {
 		c.cancel()
 		close(c.send)
 		c.conn.Close()
+
 		utils.Info("WebSocket client connection closed.")
 	})
 }
@@ -111,11 +110,6 @@ func (c *Client) WriteLoop() {
 				utils.Error("Error writing message to WebSocket:", err)
 				return
 			}
-
-			// if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			// 	utils.Error("Error writing message to WebSocket:", err)
-			// 	return
-			// }
 		case <-ticker.C: // Send ping message to keep connection alive
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				utils.Error("Error sending ping message to WebSocket:", err)
@@ -131,13 +125,11 @@ func (c *Client) WriteLoop() {
 
 // ReadLoop continuously reads messages from the WebSocket in base64 format
 func (c *Client) ReadLoop(
-	cmdRunner *cmdrunner.CommandRunner,
-	targetHost string,
 	onError func(err error), // Callback for handling read errors
 ) {
 	defer func() {
 		c.Close()
-		utils.Info("WebSocket ReadLoop finished for target:", targetHost)
+		utils.Info("WebSocket ReadLoop finished:")
 	}()
 
 	c.conn.SetReadLimit(512)
@@ -151,7 +143,7 @@ func (c *Client) ReadLoop(
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				utils.Error("Unexpected WebSocket close error for client connected to", targetHost, ":", err)
+				utils.Error("Unexpected WebSocket close error for client connected to", ":", err)
 			}
 			onError(err)
 			return
@@ -159,7 +151,7 @@ func (c *Client) ReadLoop(
 
 		if c.isRunCmd {
 			utils.Info("Ignoring subsequent message from client as command is executing.")
-			c.Send([]byte("Server: Only one command can be executed at a time. Ignoring subsequent messages.\r\n"))
+			c.Send([]byte("Server: Only one command can be executed at a time. Ignoring subsequent messages."))
 			continue
 		}
 
@@ -182,7 +174,7 @@ func (c *Client) ReadLoop(
 
 		// Decoded the base64 command
 		cmdEncodedString := string(msg.Command)
-		utils.Info("Received Base64-encoded command from WebSocket client for target", targetHost, ":", cmdEncodedString)
+		utils.Info("Received Base64-encoded command from WebSocket client:", cmdEncodedString)
 
 		c.isRunCmd = true
 
@@ -194,7 +186,7 @@ func (c *Client) ReadLoop(
 			}()
 
 			// Pass the Base64-encoded string directly to RunAndStream
-			execErr := cmdRunner.RunAndStream(cmdExecCtx, cmdEncodedString, targetHost, c)
+			execErr := cmdrunner.RunAndStream(cmdExecCtx, cmdEncodedString, c)
 
 			if execErr != nil {
 				decodedCmd, decodeErr := base64.StdEncoding.DecodeString(cmdEncodedString)
@@ -202,11 +194,9 @@ func (c *Client) ReadLoop(
 				if decodeErr == nil {
 					cmdForErrorMsg = string(decodedCmd)
 				}
-				errMsg := fmt.Sprintf("Error executing command '%s' on %s: %v\r\n", cmdForErrorMsg, targetHost, execErr)
+				errMsg := fmt.Sprintf("Error executing command '%s': %v\r\n", cmdForErrorMsg, execErr)
 				utils.Error(errMsg)
 				c.Send([]byte(fmt.Sprintf("ERROR: %s", errMsg)))
-			} else {
-				c.Send([]byte(fmt.Sprintf("\r\nBase64-encoded command received on %s finished successfully.\r\n", targetHost)))
 			}
 		}()
 	}
@@ -215,4 +205,9 @@ func (c *Client) ReadLoop(
 // A func to update the isRunCmd attributes
 func (c *Client) UpdateState(newState bool) {
 	c.isRunCmd = newState
+}
+
+// A func to set ctx and cancelFunc
+func (c *Client) SetCancelFunc(cancel context.CancelFunc) {
+	c.cancel = cancel
 }

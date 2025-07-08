@@ -1,14 +1,14 @@
 # Example json data from client send to WebSocket server
 
 ```
-websocat ws://localhost:8080/ws?target=14.225.204.41
+websocat 'ws://localhost:8080/ws'
 
 # tcpdump -nni any tcp
 {"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AK"}
 
-# journalctl -u webhooks-notify -f
-{"type":"command","command":"am91cm5hbGN0bCAtdSB3ZWJob29rcy1ub3RpZnkgLWYK"}
-
 # ls .
 {"type":"command","command":"bHMgLgo="}
+
+# tail -f /home/minh04/Desktop/Workplace/websocket-backend/test.txt
+{"type":"command","command":"dGFpbCAtZiAvaG9tZS9taW5oMDQvRGVza3RvcC9Xb3JrcGxhY2Uvd2Vic29ja2V0LWJhY2tlbmQvdGVzdC50eHQ="}
 ```

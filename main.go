@@ -20,7 +20,7 @@ func main() {
 		utils.Error("Failed to load configuration:", err)
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
-	utils.Info("Configuration loaded. Port:", cfg.Port, "Inventory Targets:", len(cfg.Target))
+	utils.Info("Configuration loaded. Port:", cfg.Port)
 
 	// Create a new Routes instance with the loaded configuration
 	appRoutes := routes.NewRoutes(cfg)

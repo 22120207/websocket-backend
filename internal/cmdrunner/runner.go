@@ -5,43 +5,28 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
+	"os/exec"
 	"strings"
 	"sync"
 
 	"websocket-backend/internal/allowedcmds"
-	"websocket-backend/internal/config"
-	"websocket-backend/internal/customSSH"
 	"websocket-backend/pkg/utils"
 )
 
-type CommandRunner struct {
-	Config *config.Config
-}
-
-// NewCommandRunner creates and returns a new CommandRunner instance.
-func NewCommandRunner(cfg *config.Config) *CommandRunner {
-	return &CommandRunner{
-		Config: cfg,
-	}
-}
-
-// RunAndStream decodes the Base64-encoded command, executes it on the target host via SSH,
-// and streams its stdout and stderr output back to the provided StreamSender.
-// It respects the provided context for cancellation.
-func (cr *CommandRunner) RunAndStream(
+// RunAndStream decodes the Base64-encoded command, executes it on the current host,
+func RunAndStream(
 	ctx context.Context,
 	encodedCmd string,
-	targetHost string,
 	wsClient StreamSender,
 ) error {
+	// Decode the Base64-encoded command
 	decodedCmdBytes, err := base64.StdEncoding.DecodeString(encodedCmd)
 	if err != nil {
 		utils.Error("Failed to Base64 decode command:", err)
 		return fmt.Errorf("failed to decode command: %w", err)
 	}
 	fullCmd := string(decodedCmdBytes)
-	utils.Info("Attempting to run command:", strings.ReplaceAll(fullCmd, "\n", " "), "on target:", targetHost)
+	utils.Info("Attempting to run command:", strings.ReplaceAll(fullCmd, "\n", ""))
 
 	parts := strings.Fields(fullCmd)
 	if len(parts) == 0 {
@@ -49,127 +34,107 @@ func (cr *CommandRunner) RunAndStream(
 	}
 	baseCmd := parts[0]
 
+	// Check if the command is in the black list (contain sudo, rm, systemctl, ...)
+	if allowedcmds.IsBlackListCommand(fullCmd) {
+		utils.Error("Attempted to run command injection in black list:", baseCmd)
+		return fmt.Errorf("command '%s' is in black list", baseCmd)
+	}
+
+	// Check if the command is allowed
 	if !allowedcmds.IsValidCommand(baseCmd) {
 		utils.Error("Attempted to run disallowed command:", baseCmd)
 		return fmt.Errorf("command '%s' is not allowed", baseCmd)
 	}
-	utils.Info("Command '" + baseCmd + "' is allowed. Proceeding with SSH execution.")
 
-	// Get the SSHConfig for the target (username, passwd and key)
-	sshConnConfig := cr.Config.GetSSHClientConfig(targetHost)
-	if sshConnConfig == nil || sshConnConfig.Username == "" {
-		return fmt.Errorf("SSH configuration for target '%s' not found or incomplete", targetHost)
-	}
+	// Create a context for the command
+	ctx, cmdCancel := context.WithCancel(ctx)
+	defer cmdCancel()
 
-	sshClientConfig, err := customSSH.GetSSHClientConfig(sshConnConfig)
+	cmd := exec.CommandContext(ctx, baseCmd, parts[1:]...)
+
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		utils.Error("Failed to get SSH client config:", err)
-		return fmt.Errorf("failed to get SSH client config: %w", err)
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
-	sshConn, err := customSSH.Connect(sshConnConfig.Target, sshClientConfig)
+	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		utils.Error("Failed to connect to SSH host", sshConnConfig.Target, ":", err)
-		return fmt.Errorf("failed to connect to SSH host %s: %w", sshConnConfig.Target, err)
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
 	}
-	defer func() {
-		utils.Info("Closing SSH connection to", sshConnConfig.Target)
-		sshConn.Close()
-	}()
 
-	stdoutPipe, stderrPipe, session, err := customSSH.ExecuteStream(sshConn, fullCmd)
-	if err != nil {
-		utils.Error("Failed to execute command '"+strings.ReplaceAll(fullCmd, "\n", " ")+"' on", sshConnConfig.Target, ":", err)
-		return fmt.Errorf("failed to execute command '%s' on %s: %w", strings.ReplaceAll(fullCmd, "\n", " "), sshConnConfig.Target, err)
+	// Set the cancel function in the WebSocket client
+	wsClient.SetCancelFunc(cmdCancel)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
 	}
-	defer func() {
-		utils.Info("Closing SSH session for command:", strings.ReplaceAll(fullCmd, "\n", " "))
-		session.Close()
-	}()
 
 	var wg sync.WaitGroup
-	buffer := make([]byte, 4096)
 
+	// Stream stdout
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		pr, pw := io.Pipe()
-
-		var scanWg sync.WaitGroup
-		scanWg.Add(1)
-		go func() {
-			defer scanWg.Done()
-			scanner := bufio.NewScanner(pr)
-			for scanner.Scan() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
 				line := scanner.Bytes()
-
 				lineCopy := make([]byte, len(line))
 				copy(lineCopy, line)
-
 				wsClient.Send(lineCopy)
 			}
-			if err := scanner.Err(); err != nil {
-				utils.Error(fmt.Sprintf("Scanner error streaming stdout for command '%s': %v", strings.ReplaceAll(fullCmd, "\n", " "), err))
+		}
+		if err := scanner.Err(); err != nil {
+			utils.Error("Error streaming stdout:", err)
+		}
+	}()
+
+	// Stream stderr
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				line := scanner.Bytes()
+				lineCopy := make([]byte, len(line))
+				copy(lineCopy, line)
+				wsClient.Send(lineCopy)
 			}
-		}()
-
-		_, err := io.CopyBuffer(pw, stdoutPipe, buffer)
-		pw.Close() // This signals scanner to end
-		if err != nil && err != io.EOF {
-			utils.Error(fmt.Sprintf("Error copying stdout for command '%s' on %s: %v", strings.ReplaceAll(fullCmd, "\n", " "), sshConnConfig.Target, err))
 		}
-
-		// Wait for scanner goroutine to fully drain the pipe
-		scanWg.Wait()
-
-		utils.Info("Stdout streaming finished for command:", strings.ReplaceAll(fullCmd, "\n", ""))
+		if err := scanner.Err(); err != nil {
+			utils.Error("Error streaming stderr:", err)
+		}
 	}()
 
+	// Wait for command to finish or kill on context cancellation
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, err := io.CopyBuffer(&websocketStreamWriter{wsClient: wsClient, streamType: "stderr"}, stderrPipe, buffer)
-		if err != nil && err != io.EOF {
-			utils.Error(fmt.Sprintf("Error streaming stderr for command '%s' on %s: %v", fullCmd, sshConnConfig.Target, err))
-		}
-		utils.Info("Stdout streaming finished for command:", strings.ReplaceAll(fullCmd, "\n", ""))
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		sessionDone := make(chan error, 1)
-		go func() {
-			sessionDone <- session.Wait()
-		}()
-
 		select {
 		case <-ctx.Done():
-			sshConn.Close()
-		case err := <-sessionDone:
-			if err != nil {
-				utils.Error("Remote command '"+strings.ReplaceAll(fullCmd, "\n", " ")+"' exited with error:", err)
-			} else {
-				utils.Info("Remote command '" + strings.ReplaceAll(fullCmd, "\n", " ") + "' finished gracefully.")
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+				utils.Info("Command process killed due to context cancellation")
 			}
 			return
+		default:
+			if err := cmd.Wait(); err != nil {
+				utils.Error("Command exited with error:", err)
+			} else {
+				utils.Info("Command finished successfully.")
+			}
 		}
 	}()
 
+	// Wait for all goroutines to complete
 	wg.Wait()
-
-	utils.Info("All streaming and command management goroutines for", strings.ReplaceAll(fullCmd, "\n", " "), "have completed.")
+	utils.Info("All streams and command execution complete for:", fullCmd)
 	return nil
-}
-
-type websocketStreamWriter struct {
-	wsClient   StreamSender
-	streamType string
-}
-
-func (w *websocketStreamWriter) Write(p []byte) (n int, err error) {
-	w.wsClient.Send(p)
-	return len(p), nil
 }

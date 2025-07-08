@@ -2,7 +2,7 @@ module websocket-backend
 
 go 1.24.4
 
-require golang.org/x/crypto v0.23.0
+require golang.org/x/crypto v0.23.0 // indirect
 
 require (
 	github.com/bytedance/sonic v1.11.6 // indirect
