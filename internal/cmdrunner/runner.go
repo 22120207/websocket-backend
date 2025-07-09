@@ -46,10 +46,6 @@ func RunAndStream(
 		return fmt.Errorf("command '%s' is not allowed", baseCmd)
 	}
 
-	// Create a context for the command
-	ctx, cmdCancel := context.WithCancel(ctx)
-	defer cmdCancel()
-
 	cmd := exec.CommandContext(ctx, baseCmd, parts[1:]...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -61,9 +57,6 @@ func RunAndStream(
 	if err != nil {
 		return fmt.Errorf("failed to get stderr pipe: %w", err)
 	}
-
-	// Set the cancel function in the WebSocket client
-	wsClient.SetCancelFunc(cmdCancel)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start command: %w", err)
@@ -129,6 +122,7 @@ func RunAndStream(
 				utils.Error("Command exited with error:", err)
 			} else {
 				utils.Info("Command finished successfully.")
+				wsClient.Send([]byte("command finished successfully"))
 			}
 		}
 	}()

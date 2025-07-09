@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"net/http"
 	"websocket-backend/pkg/utils"
 
@@ -35,5 +36,25 @@ func NewWebSocketHandler() gin.HandlerFunc {
 				utils.Error("WebSocket ReadLoop error", ":", readErr)
 			},
 		)
+
+		// Send data in json format
+		type MsgStatus struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		}
+
+		msg := MsgStatus{
+			Status:  "ok",
+			Message: "websocket connect success",
+		}
+
+		jsonData, err := json.Marshal(msg)
+		if err != nil {
+			return
+		}
+
+		if err := client.conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
+			return
+		}
 	}
 }

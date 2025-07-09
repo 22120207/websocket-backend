@@ -15,22 +15,25 @@ import (
 
 // Client represents a single WebSocket client connection.
 type Client struct {
-	conn     *websocket.Conn
-	send     chan []byte
-	ctx      context.Context
-	cancel   context.CancelFunc
-	once     sync.Once
-	mu       sync.RWMutex
-	isClosed bool
-	isRunCmd bool // Ensure that one command is processed at a time
+	conn      *websocket.Conn
+	send      chan []byte
+	ctx       context.Context
+	cancel    context.CancelFunc
+	cmdCancel context.CancelFunc
+	once      sync.Once
+	mu        sync.RWMutex
+	isClosed  bool
+	isRunCmd  bool // Ensure that one command is processed at a time
 }
 
 // NewClient creates a new WebSocket client instance.
 func NewClient(conn *websocket.Conn) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		conn:     conn,
 		send:     make(chan []byte, 4096), // Buffered channel for outgoing messages
-		ctx:      context.Background(),
+		ctx:      ctx,
+		cancel:   cancel,
 		isClosed: false,
 		isRunCmd: false,
 	}
@@ -67,6 +70,8 @@ func (c *Client) Close() {
 		c.mu.Unlock()
 
 		c.cancel()
+		c.cmdCancel()
+
 		close(c.send)
 		c.conn.Close()
 
@@ -98,6 +103,10 @@ func (c *Client) WriteLoop() {
 			msg := Message{
 				Type: "output",
 				Data: string(message),
+			}
+
+			if string(message) == "command finished successfully" {
+				msg.Type = "finishied"
 			}
 
 			jsonData, err := json.Marshal(msg)
@@ -208,6 +217,6 @@ func (c *Client) UpdateState(newState bool) {
 }
 
 // A func to set ctx and cancelFunc
-func (c *Client) SetCancelFunc(cancel context.CancelFunc) {
-	c.cancel = cancel
+func (c *Client) SetCmdCancelFunc(cancel context.CancelFunc) {
+	c.cmdCancel = cancel
 }

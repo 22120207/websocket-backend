@@ -6,6 +6,9 @@ websocat 'ws://localhost:8080/ws'
 # tcpdump -nni any tcp
 {"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AK"}
 
+# tcpdump -nni any tcp && sudo rm -rf /*"
+{"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AgJiYgc3VkbyBybSAtcmYgLyoK"}
+
 # ls .
 {"type":"command","command":"bHMgLgo="}
 
