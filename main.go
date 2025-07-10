@@ -1,44 +1,35 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
-	"time"
-
-	"websocket-backend/internal/config"
-	"websocket-backend/pkg/utils"
+	"websocket-backend/internal/configs"
+	"websocket-backend/internal/helpers"
+	"websocket-backend/internal/websocket"
 	"websocket-backend/routes"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	utils.SetupLogger()
-	utils.Info("Starting WebSocket backend application...")
 
-	cfg, err := config.LoadConfig()
+	// Init log
+	helpers.InitLogger()
+
+	r := routes.SetupRouter()
+
+	// Read config
+	cf := configs.Config{}
+	err := cf.Load("internal/configs/config.json")
 	if err != nil {
-		utils.Error("Failed to load configuration:", err)
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
-	utils.Info("Configuration loaded. Port:", cfg.Port)
-
-	// Create a new Routes instance with the loaded configuration
-	appRoutes := routes.NewRoutes(cfg)
-	r := appRoutes.Setup()
-
-	serverAddr := fmt.Sprintf(":%s", cfg.Port)
-	server := &http.Server{
-		Addr:         serverAddr,
-		Handler:      r,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		panic(err)
 	}
 
-	utils.Info("HTTP server starting on", serverAddr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		utils.Error("HTTP server failed to start:", err)
-		log.Fatalf("HTTP server failed to start: %v", err)
+	// Load config for websocket
+	websocket.LoadAllowedCmds(cf)
+	websocket.LoadBlacklistCmds(cf)
+
+	// Run websocket server
+	if err := r.Run(":65432"); err != nil {
+		log.Printf("WebSocket server failed: %v", err)
+		return
 	}
-	utils.Info("HTTP server shut down.")
 }

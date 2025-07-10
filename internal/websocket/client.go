@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	"websocket-backend/internal/cmdrunner"
-	"websocket-backend/pkg/utils"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/gorilla/websocket"
 )
@@ -46,7 +46,7 @@ func (c *Client) Send(message []byte) {
 	c.mu.Unlock()
 
 	if closed {
-		utils.Debug("Attempted to send message to a closed WebSocket client.")
+		log.Debug("Attempted to send message to a closed WebSocket client.")
 		return
 	}
 
@@ -54,10 +54,10 @@ func (c *Client) Send(message []byte) {
 	case c.send <- message:
 		// Message sent to channel
 	case <-c.ctx.Done():
-		utils.Debug("Context done, not sending message to WebSocket client.")
+		log.Debug("Context done, not sending message to WebSocket client.")
 	default:
 		// If channel is full and context not done, log a warning
-		utils.Error("WebSocket send channel is full, dropping message.")
+		log.Error("WebSocket send channel is full, dropping message.")
 		return
 	}
 }
@@ -70,12 +70,10 @@ func (c *Client) Close() {
 		c.mu.Unlock()
 
 		c.cancel()
-		c.cmdCancel()
-
 		close(c.send)
 		c.conn.Close()
 
-		utils.Info("WebSocket client connection closed.")
+		log.Info("WebSocket client connection closed.")
 	})
 }
 
@@ -84,7 +82,7 @@ func (c *Client) WriteLoop() {
 	ticker := time.NewTicker(time.Second * 9) // Ping interval for WebSocket keep-alive
 	defer func() {
 		ticker.Stop()
-		utils.Info("WebSocket WriteLoop finished.")
+		log.Info("WebSocket WriteLoop finished.")
 	}()
 
 	for {
@@ -111,21 +109,21 @@ func (c *Client) WriteLoop() {
 
 			jsonData, err := json.Marshal(msg)
 			if err != nil {
-				utils.Error(err.Error())
+				log.Error(err.Error())
 				return
 			}
 
 			if err := c.conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
-				utils.Error("Error writing message to WebSocket:", err)
+				log.Error("Error writing message to WebSocket:", err)
 				return
 			}
 		case <-ticker.C: // Send ping message to keep connection alive
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				utils.Error("Error sending ping message to WebSocket:", err)
+				log.Error("Error sending ping message to WebSocket:", err)
 				return
 			}
 		case <-c.ctx.Done(): // Context cancelled, signaling client disconnection
-			utils.Info("WebSocket WriteLoop context cancelled.")
+			log.Info("WebSocket WriteLoop context cancelled.")
 			c.Close()
 			return
 		}
@@ -138,7 +136,7 @@ func (c *Client) ReadLoop(
 ) {
 	defer func() {
 		c.Close()
-		utils.Info("WebSocket ReadLoop finished:")
+		log.Info("WebSocket ReadLoop finished:")
 	}()
 
 	c.conn.SetReadLimit(512)
@@ -152,14 +150,14 @@ func (c *Client) ReadLoop(
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				utils.Error("Unexpected WebSocket close error for client connected to", ":", err)
+				log.Error("Unexpected WebSocket close error for client connected to", ":", err)
 			}
 			onError(err)
 			return
 		}
 
 		if c.isRunCmd {
-			utils.Info("Ignoring subsequent message from client as command is executing.")
+			log.Info("Ignoring subsequent message from client as command is executing.")
 			c.Send([]byte("Server: Only one command can be executed at a time. Ignoring subsequent messages."))
 			continue
 		}
@@ -173,7 +171,7 @@ func (c *Client) ReadLoop(
 		var msg ReceiveMsg
 		err = json.Unmarshal(message, &msg)
 		if err != nil {
-			utils.Error(err.Error())
+			log.Error(err.Error())
 		}
 
 		// If the type is not "command" --> exit
@@ -183,7 +181,7 @@ func (c *Client) ReadLoop(
 
 		// Decoded the base64 command
 		cmdEncodedString := string(msg.Command)
-		utils.Info("Received Base64-encoded command from WebSocket client:", cmdEncodedString)
+		log.Info("Received Base64-encoded command from WebSocket client:", cmdEncodedString)
 
 		c.isRunCmd = true
 
@@ -195,7 +193,7 @@ func (c *Client) ReadLoop(
 			}()
 
 			// Pass the Base64-encoded string directly to RunAndStream
-			execErr := cmdrunner.RunAndStream(cmdExecCtx, cmdEncodedString, c)
+			execErr := runAndStream(cmdExecCtx, cmdEncodedString, c)
 
 			if execErr != nil {
 				decodedCmd, decodeErr := base64.StdEncoding.DecodeString(cmdEncodedString)
@@ -204,7 +202,7 @@ func (c *Client) ReadLoop(
 					cmdForErrorMsg = string(decodedCmd)
 				}
 				errMsg := fmt.Sprintf("Error executing command '%s': %v\r\n", cmdForErrorMsg, execErr)
-				utils.Error(errMsg)
+				log.Error(errMsg)
 				c.Send([]byte(fmt.Sprintf("ERROR: %s", errMsg)))
 			}
 		}()

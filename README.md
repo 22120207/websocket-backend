@@ -1,7 +1,7 @@
 # Example json data from client send to WebSocket server
 
 ```
-websocat 'ws://localhost:8080/ws'
+websocat 'ws://localhost:65432/v1/api/ws/stream'
 
 # tcpdump -nni any tcp
 {"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AK"}

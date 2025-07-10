@@ -1,30 +1,31 @@
 package routes
 
 import (
-	"websocket-backend/controllers"
-	"websocket-backend/internal/config"
+	"net/http"
+	"websocket-backend/internal/helpers"
 	"websocket-backend/internal/websocket"
-	"websocket-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Routes struct {
-	router    *gin.Engine
-	appConfig *config.Config
+	router *gin.Engine
 }
 
-func NewRoutes(cfg *config.Config) *Routes {
-	r := &Routes{
-		router:    gin.Default(),
-		appConfig: cfg,
+var lastActionTimeLog = "/etc/api/data/last_action_time"
+
+func SetupRouter() *gin.Engine {
+
+	r := Routes{
+		router: gin.Default(),
 	}
 
 	r.router.Use(func(c *gin.Context) {
+		// add header Access-Control-Allow-Origin
 		c.Writer.Header().Set("Content-Type", "application/json")
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Max-Age", "86400")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, UPDATE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, UPDATE")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-Max")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -33,28 +34,22 @@ func NewRoutes(cfg *config.Config) *Routes {
 		} else {
 			c.Next()
 		}
+
+		if c.Request.Method != http.MethodGet {
+			helpers.LogActionsTime(lastActionTimeLog)
+		}
 	})
 
-	return r
-}
+	// UPDATE FOR WEBSOCKET 9/7/2025
 
-func (r *Routes) Setup() *gin.Engine {
-	// API route group for HTTP endpoints
-	httpGroup := r.router.Group("/http")
-	{
-		httpGroup.GET("/allowed", controllers.GetAllowedCommandsHandler())
-		httpGroup.GET("/health", func(c *gin.Context) {
-			c.JSON(200, gin.H{"status": "ok"})
-		})
-	}
+	apiV1WS := r.router.Group("/v1/api/ws")
 
-	// API route group for WebSocket endpoints
-	wsGroup := r.router.Group("/ws")
-	{
-		wsGroup.GET("", websocket.NewWebSocketHandler())
-	}
+	// Route for list of allowed commands
+	apiV1WS.GET("/allowed", websocket.GetAllowedCommandsHandler())
 
-	utils.Info("Router setup complete. HTTP endpoints under /http, WebSocket endpoint /ws")
+	apiV1WS.GET("/stream", websocket.NewWebSocketHandler())
+
+	// END OF UPDATE
 
 	return r.router
 }

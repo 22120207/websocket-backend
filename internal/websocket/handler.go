@@ -3,10 +3,10 @@ package websocket
 import (
 	"encoding/json"
 	"net/http"
-	"websocket-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	log "github.com/sirupsen/logrus"
 )
 
 // NewWebSocketHandler creates a Gin handler function for WebSocket connections.
@@ -22,10 +22,10 @@ func NewWebSocketHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			utils.Error("WebSocket upgrade failed:", err)
+			log.Error("WebSocket upgrade failed:", err)
 			return
 		}
-		utils.Info("WebSocket connection established.")
+		log.Info("WebSocket connection established.")
 
 		client := NewClient(conn)
 
@@ -33,7 +33,7 @@ func NewWebSocketHandler() gin.HandlerFunc {
 
 		go client.ReadLoop(
 			func(readErr error) {
-				utils.Error("WebSocket ReadLoop error", ":", readErr)
+				log.Error("WebSocket ReadLoop error", ":", readErr)
 			},
 		)
 
@@ -50,10 +50,12 @@ func NewWebSocketHandler() gin.HandlerFunc {
 
 		jsonData, err := json.Marshal(msg)
 		if err != nil {
+			log.Error(err.Error())
 			return
 		}
 
 		if err := client.conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
+			log.Error("Error writing message to WebSocket:", err)
 			return
 		}
 	}
