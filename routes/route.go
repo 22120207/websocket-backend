@@ -1,8 +1,6 @@
 package routes
 
 import (
-	"net/http"
-	"websocket-backend/internal/helpers"
 	"websocket-backend/internal/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -11,8 +9,6 @@ import (
 type Routes struct {
 	router *gin.Engine
 }
-
-var lastActionTimeLog = "/etc/api/data/last_action_time"
 
 func SetupRouter() *gin.Engine {
 
@@ -33,10 +29,6 @@ func SetupRouter() *gin.Engine {
 			c.AbortWithStatus(200)
 		} else {
 			c.Next()
-		}
-
-		if c.Request.Method != http.MethodGet {
-			helpers.LogActionsTime(lastActionTimeLog)
 		}
 	})
 
