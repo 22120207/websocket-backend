@@ -157,9 +157,9 @@ func (c *Client) ReadLoop(
 		}
 
 		if c.isRunCmd {
-			log.Info("Ignoring subsequent message from client as command is executing.")
-			c.Send([]byte("Server: Only one command can be executed at a time. Ignoring subsequent messages."))
-			continue
+			log.Info("Interrupted the previous command. Run the new command.")
+			c.Send([]byte("Server: Interrupted the previous command. Run the new command."))
+			c.cmdCancel()
 		}
 
 		// Unmarshal the json data receive from client
@@ -176,7 +176,9 @@ func (c *Client) ReadLoop(
 
 		// If the type is not "command" --> exit
 		if msg.Type != "command" {
-			return
+			log.Warnf("Unsupported message type received: %s", msg.Type)
+			c.Send([]byte("Server: Unsupported message type."))
+			continue
 		}
 
 		// Decoded the base64 command
