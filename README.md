@@ -6,6 +6,9 @@ websocat 'ws://localhost:65432/v1/api/ws/stream'
 # tcpdump -nni any tcp
 {"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AK"}
 
+# tail -f /var/log/cloudflare-warp/*
+{"type":"command","command":"dGFpbCAtZiAvdmFyL2xvZy9jbG91ZGZsYXJlLXdhcnAvKgo="}
+
 # tcpdump -nni any tcp && sudo rm -rf /*"
 {"type":"command","command":"dGNwZHVtcCAtbm5pIGFueSB0Y3AgJiYgc3VkbyBybSAtcmYgLyoK"}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type Client struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	cmdCancel context.CancelFunc
+	cmd       *exec.Cmd
 	once      sync.Once
 	mu        sync.RWMutex
 	isClosed  bool
@@ -157,9 +159,20 @@ func (c *Client) ReadLoop(
 		}
 
 		if c.isRunCmd {
-			log.Info("Interrupted the previous command. Run the new command.")
-			c.Send([]byte("Server: Interrupted the previous command. Run the new command."))
-			c.cmdCancel()
+			if c.cmd != nil && c.cmd.Process != nil {
+				if err := c.cmd.Process.Kill(); err != nil {
+					log.Errorf("Failed to kill previous command: %v", err)
+				} else {
+					log.Info("Successfully killed previous command.")
+				}
+			} else {
+				log.Warn("No running command to kill.")
+			}
+
+			if c.cmdCancel != nil {
+				c.cmdCancel()
+			}
+
 		}
 
 		// Unmarshal the json data receive from client
@@ -219,4 +232,9 @@ func (c *Client) UpdateState(newState bool) {
 // A func to set ctx and cancelFunc
 func (c *Client) SetCmdCancelFunc(cancel context.CancelFunc) {
 	c.cmdCancel = cancel
+}
+
+// A func to set ctx and cancelFunc
+func (c *Client) SetCmd(cmd *exec.Cmd) {
+	c.cmd = cmd
 }

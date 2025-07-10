@@ -49,7 +49,7 @@ func runAndStream(
 	_, cmdCancel := context.WithCancel(ctx)
 	defer cmdCancel()
 
-	cmd := exec.CommandContext(ctx, baseCmd, parts[1:]...)
+	cmd := exec.CommandContext(ctx, "bash", "-c", fullCmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -67,6 +67,8 @@ func runAndStream(
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start command: %w", err)
 	}
+
+	wsClient.SetCmd(cmd)
 
 	var wg sync.WaitGroup
 
